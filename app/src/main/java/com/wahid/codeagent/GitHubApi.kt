@@ -6,10 +6,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.Base64
+import java.net.URLEncoder
 
 class GitHubApi(private val token: String) {
     private val client = OkHttpClient()
     private val media = "application/json".toMediaType()
+    private fun enc(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())
     private fun req(url: String, method: String = "GET", body: String? = null): Request {
         val b = Request.Builder().url(url).header("Authorization", "Bearer $token").header("Accept", "application/vnd.github+json").header("X-GitHub-Api-Version", "2022-11-28")
         if (body != null) b.method(method, body.toRequestBody(media)) else if (method != "GET") b.method(method, "".toRequestBody(media))
@@ -22,12 +24,12 @@ class GitHubApi(private val token: String) {
             return if (text.isBlank()) JsonNull else Json.parseToJsonElement(text)
         }
     }
-    fun branchSha(owner: String, repo: String, branch: String): String = call(req("https://api.github.com/repos/$owner/$repo/git/ref/heads/$branch")).jsonObject["object"]!!.jsonObject["sha"]!!.jsonPrimitive.content
+    fun branchSha(owner: String, repo: String, branch: String): String = call(req("https://api.github.com/repos/$owner/$repo/git/ref/heads/${enc(branch)}")).jsonObject["object"]!!.jsonObject["sha"]!!.jsonPrimitive.content
     fun listFiles(owner: String, repo: String, branch: String): List<String> {
         val sha = branchSha(owner, repo, branch)
         return call(req("https://api.github.com/repos/$owner/$repo/git/trees/$sha?recursive=1")).jsonObject["tree"]!!.jsonArray.mapNotNull { if (it.jsonObject["type"]?.jsonPrimitive?.content == "blob") it.jsonObject["path"]?.jsonPrimitive?.content else null }
     }
-    fun readFile(owner: String, repo: String, path: String, branch: String): JsonObject = call(req("https://api.github.com/repos/$owner/$repo/contents/${path.trimStart('/')}?ref=$branch")).jsonObject
+    fun readFile(owner: String, repo: String, path: String, branch: String): JsonObject = call(req("https://api.github.com/repos/$owner/$repo/contents/${path.trimStart('/')}?ref=${enc(branch)}")).jsonObject
     fun createBranch(owner: String, repo: String, newBranch: String, baseBranch: String) {
         val sha = branchSha(owner, repo, baseBranch)
         val body = buildJsonObject { put("ref", "refs/heads/$newBranch"); put("sha", sha) }
