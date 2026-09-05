@@ -24,6 +24,34 @@ class GitHubApi(private val token: String) {
             return if (text.isBlank()) JsonNull else Json.parseToJsonElement(text)
         }
     }
+    fun authenticatedLogin(): String = call(req("https://api.github.com/user")).jsonObject["login"]!!.jsonPrimitive.content
+
+    fun listRepositories(): List<String> {
+        val result = mutableListOf<String>()
+        var page = 1
+        while (page <= 20) {
+            val json = call(req("https://api.github.com/user/repos?per_page=100&page=$page&sort=full_name")).jsonArray
+            if (json.isEmpty()) break
+            result += json.mapNotNull { it.jsonObject["full_name"]?.jsonPrimitive?.content }
+            if (json.size < 100) break
+            page++
+        }
+        return result.distinct()
+    }
+
+    fun listBranches(owner: String, repo: String): List<String> {
+        val result = mutableListOf<String>()
+        var page = 1
+        while (page <= 20) {
+            val json = call(req("https://api.github.com/repos/${enc(owner)}/${enc(repo)}/branches?per_page=100&page=$page")).jsonArray
+            if (json.isEmpty()) break
+            result += json.mapNotNull { it.jsonObject["name"]?.jsonPrimitive?.content }
+            if (json.size < 100) break
+            page++
+        }
+        return result.distinct()
+    }
+
     fun branchSha(owner: String, repo: String, branch: String): String = call(req("https://api.github.com/repos/$owner/$repo/git/ref/heads/${enc(branch)}")).jsonObject["object"]!!.jsonObject["sha"]!!.jsonPrimitive.content
     fun listFiles(owner: String, repo: String, branch: String): List<String> {
         val sha = branchSha(owner, repo, branch)
