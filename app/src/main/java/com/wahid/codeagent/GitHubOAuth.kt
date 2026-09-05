@@ -6,10 +6,8 @@ import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -47,7 +45,7 @@ class GitHubOAuth(private val context: Context) {
                 userCode = json["user_code"]!!.jsonPrimitive.content,
                 verificationUri = json["verification_uri"]!!.jsonPrimitive.content,
                 deviceCode = json["device_code"]!!.jsonPrimitive.content,
-                intervalSeconds = json["interval"]?.jsonPrimitive?.long ?: 5L
+                intervalSeconds = json["interval"]?.jsonPrimitive?.longOrNull ?: 5L
             )
         }
     }
