@@ -4,7 +4,9 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -12,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -19,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +58,13 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
     var owner by remember { mutableStateOf(store.get("owner") ?: "") }
     var repo by remember { mutableStateOf(store.get("repo") ?: "Medicalcoupons.in") }
     var branch by remember { mutableStateOf(store.get("branch") ?: "main") }
+    var repositories by remember { mutableStateOf<List<String>>(emptyList()) }
+    var branches by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loadingRepositories by remember { mutableStateOf(false) }
+    var loadingBranches by remember { mutableStateOf(false) }
+    var repoMenuOpen by remember { mutableStateOf(false) }
+    var branchMenuOpen by remember { mutableStateOf(false) }
+    var githubDataError by remember { mutableStateOf("") }
     var task by remember { mutableStateOf("") }
     var running by remember { mutableStateOf(false) }
     var loggingIn by remember { mutableStateOf(false) }
@@ -61,6 +73,67 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
     var loginError by remember { mutableStateOf("") }
     var pollJob by remember { mutableStateOf<Job?>(null) }
     val logs = remember { mutableStateListOf<LogLine>() }
+
+    fun loadRepositories(token: String, preferredRepo: String = repo) {
+        if (token.isBlank()) return
+        loadingRepositories = true
+        githubDataError = ""
+        scope.launch {
+            try {
+                val repos = withContext(Dispatchers.IO) { GitHubApi(token).listRepositories() }
+                repositories = repos
+                val preferredFullName = if (preferredRepo.contains("/")) preferredRepo else {
+                    val candidate = "$owner/$preferredRepo"
+                    if (repos.contains(candidate)) candidate else preferredRepo
+                }
+                val selected = if (repos.contains(preferredFullName)) preferredFullName else repos.firstOrNull().orEmpty()
+                if (selected.isNotBlank()) {
+                    repo = selected
+                    owner = selected.substringBefore("/")
+                    store.put("repo", selected)
+                    store.put("owner", owner)
+                }
+                logs.add(LogLine("Loaded ${repos.size} GitHub repositories.", LogLine.Kind.SUCCESS))
+            } catch (e: Exception) {
+                githubDataError = e.message ?: "Unable to load repositories"
+                logs.add(LogLine(githubDataError, LogLine.Kind.ERROR))
+            } finally {
+                loadingRepositories = false
+            }
+        }
+    }
+
+    fun loadBranches(token: String, selectedRepo: String) {
+        if (token.isBlank() || !selectedRepo.contains("/")) return
+        val selectedOwner = selectedRepo.substringBefore("/")
+        val selectedName = selectedRepo.substringAfter("/")
+        loadingBranches = true
+        githubDataError = ""
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) { GitHubApi(token).listBranches(selectedOwner, selectedName) }
+                branches = result
+                if (result.isNotEmpty()) {
+                    val selectedBranch = if (result.contains(branch)) branch else result.first()
+                    branch = selectedBranch
+                    store.put("branch", selectedBranch)
+                }
+            } catch (e: Exception) {
+                githubDataError = e.message ?: "Unable to load branches"
+                logs.add(LogLine(githubDataError, LogLine.Kind.ERROR))
+            } finally {
+                loadingBranches = false
+            }
+        }
+    }
+
+    LaunchedEffect(ghToken) {
+        if (ghToken.isNotBlank()) loadRepositories(ghToken)
+    }
+
+    LaunchedEffect(repo, ghToken) {
+        if (ghToken.isNotBlank() && repo.contains("/")) loadBranches(ghToken, repo)
+    }
 
     fun beginGitHubPolling(device: GitHubOAuth.DeviceCode) {
         pollJob?.cancel()
@@ -71,9 +144,7 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
             try {
                 val token = GitHubOAuth(context).waitForToken(ghClientId, device)
                 logs.add(LogLine("GitHub authorization received. Checking account…"))
-                val login = withContext(Dispatchers.IO) {
-                    GitHubApi(token).authenticatedLogin()
-                }
+                val login = withContext(Dispatchers.IO) { GitHubApi(token).authenticatedLogin() }
                 store.put("ghToken", token)
                 store.put("owner", login)
                 ghToken = token
@@ -81,6 +152,7 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                 githubUser = login
                 logs.add(LogLine("Signed in to GitHub as $login.", LogLine.Kind.SUCCESS))
                 deviceCode = null
+                loadRepositories(token)
             } catch (e: Exception) {
                 val message = e.message ?: "GitHub login failed"
                 loginError = message
@@ -106,12 +178,8 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                     Text(deviceCode!!.userCode, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text("GitHub page: ${deviceCode!!.verificationUri}")
                     Text("The code expires after 15 minutes.")
-                    if (loggingIn) {
-                        Text("Waiting for GitHub to confirm the login…", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    if (loginError.isNotBlank()) {
-                        Text("Login error: $loginError", color = MaterialTheme.colorScheme.error)
-                    }
+                    if (loggingIn) Text("Waiting for GitHub to confirm the login…", style = MaterialTheme.typography.bodyMedium)
+                    if (loginError.isNotBlank()) Text("Login error: $loginError", color = MaterialTheme.colorScheme.error)
                 }
             },
             confirmButton = {
@@ -145,10 +213,7 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
 
                 item {
                     Text("GitHub", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Sign in with GitHub so you don't need to create or paste a personal access token.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text("Sign in with GitHub so you don't need to create or paste a personal access token.", style = MaterialTheme.typography.bodySmall)
                     Field(ghClientId, "GitHub OAuth Client ID") { ghClientId = it }
                     Button(
                         onClick = {
@@ -173,15 +238,66 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                         enabled = !loggingIn && deviceCode == null && ghClientId.isNotBlank()
                     ) { Text(if (loggingIn) "Requesting code…" else "Sign in with GitHub") }
 
-                    if (githubUser.isNotBlank()) {
-                        Text("✓ GitHub connected as $githubUser", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                    }
-                    if (loggingIn && deviceCode != null) {
-                        Text("Waiting for GitHub authorization…", style = MaterialTheme.typography.bodySmall)
+                    if (githubUser.isNotBlank()) Text("✓ GitHub connected as $githubUser", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = if (loadingRepositories) "Loading repositories…" else repo,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Repository") },
+                            modifier = Modifier.fillMaxWidth().clickable(enabled = repositories.isNotEmpty()) { repoMenuOpen = true }
+                        )
+                        DropdownMenu(
+                            expanded = repoMenuOpen,
+                            onDismissRequest = { repoMenuOpen = false },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            repositories.forEach { repository ->
+                                DropdownMenuItem(
+                                    text = { Text(repository) },
+                                    onClick = {
+                                        repo = repository
+                                        owner = repository.substringBefore("/")
+                                        branch = "main"
+                                        repoMenuOpen = false
+                                        store.put("repo", repo)
+                                        store.put("owner", owner)
+                                    }
+                                )
+                            }
+                        }
                     }
 
-                    Field(repo, "Repository") { repo = it }
-                    Field(branch, "Base branch") { branch = it }
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = if (loadingBranches) "Loading branches…" else branch,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Base branch") },
+                            modifier = Modifier.fillMaxWidth().clickable(enabled = branches.isNotEmpty()) { branchMenuOpen = true }
+                        )
+                        DropdownMenu(
+                            expanded = branchMenuOpen,
+                            onDismissRequest = { branchMenuOpen = false },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            branches.forEach { branchName ->
+                                DropdownMenuItem(
+                                    text = { Text(branchName) },
+                                    onClick = {
+                                        branch = branchName
+                                        branchMenuOpen = false
+                                        store.put("branch", branch)
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    if (githubDataError.isNotBlank()) Text(githubDataError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (repositories.isNotEmpty()) Text("${repositories.size} repositories available", style = MaterialTheme.typography.bodySmall)
+                    if (branches.isNotEmpty()) Text("${branches.size} branches available", style = MaterialTheme.typography.bodySmall)
                 }
 
                 item {
@@ -218,7 +334,7 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                                         aiApiKey = aiKey,
                                         githubToken = ghToken,
                                         owner = owner,
-                                        repo = repo,
+                                        repo = repo.substringAfter("/", repo),
                                         baseBranch = branch
                                     )
                                     val agent = AgentEngine(githubApi, aiClient, config) { logLine -> logs.add(logLine) }
@@ -229,17 +345,14 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !running && task.isNotBlank() && aiKey.isNotBlank() && ghToken.isNotBlank() && owner.isNotBlank()
+                        enabled = !running && task.isNotBlank() && aiKey.isNotBlank() && ghToken.isNotBlank() && owner.isNotBlank() && repo.contains("/") && branch.isNotBlank()
                     ) { Text(if (running) "Agent running…" else "Run agent") }
                 }
 
                 item { Text("Activity", style = MaterialTheme.typography.titleMedium) }
                 items(logs) { log -> Text("• ${log.text}", style = MaterialTheme.typography.bodySmall) }
                 item {
-                    Text(
-                        "Safety: changes are made on a new working branch and the agent creates a draft PR. The base branch is not written directly.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text("Safety: changes are made on a new working branch and the agent creates a draft PR. The base branch is not written directly.", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
