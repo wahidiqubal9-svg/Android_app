@@ -45,7 +45,7 @@ class GitHubOAuth(private val context: Context) {
                 userCode = json["user_code"]!!.jsonPrimitive.content,
                 verificationUri = json["verification_uri"]!!.jsonPrimitive.content,
                 deviceCode = json["device_code"]!!.jsonPrimitive.content,
-                intervalSeconds = json["interval"]?.jsonPrimitive?.longOrNull ?: 5L
+                intervalSeconds = json["interval"]?.jsonPrimitive?.content?.toLongOrNull() ?: 5L
             )
         }
     }
