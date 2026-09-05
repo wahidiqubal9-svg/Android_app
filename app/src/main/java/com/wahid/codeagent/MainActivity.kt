@@ -18,6 +18,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -56,47 +58,69 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
     var loggingIn by remember { mutableStateOf(false) }
     var githubUser by remember { mutableStateOf(if (ghToken.isNotBlank()) owner else "") }
     var deviceCode by remember { mutableStateOf<GitHubOAuth.DeviceCode?>(null) }
+    var loginError by remember { mutableStateOf("") }
+    var pollJob by remember { mutableStateOf<Job?>(null) }
     val logs = remember { mutableStateListOf<LogLine>() }
+
+    fun beginGitHubPolling(device: GitHubOAuth.DeviceCode) {
+        pollJob?.cancel()
+        loggingIn = true
+        loginError = ""
+        logs.add(LogLine("Waiting for GitHub authorization…"))
+        pollJob = scope.launch {
+            try {
+                val token = GitHubOAuth(context).waitForToken(ghClientId, device)
+                logs.add(LogLine("GitHub authorization received. Checking account…"))
+                val login = withContext(Dispatchers.IO) {
+                    GitHubApi(token).authenticatedLogin()
+                }
+                store.put("ghToken", token)
+                store.put("owner", login)
+                ghToken = token
+                owner = login
+                githubUser = login
+                logs.add(LogLine("Signed in to GitHub as $login.", LogLine.Kind.SUCCESS))
+                deviceCode = null
+            } catch (e: Exception) {
+                val message = e.message ?: "GitHub login failed"
+                loginError = message
+                logs.add(LogLine(message, LogLine.Kind.ERROR))
+            } finally {
+                loggingIn = false
+                pollJob = null
+            }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { pollJob?.cancel() }
+    }
 
     if (deviceCode != null) {
         AlertDialog(
             onDismissRequest = { if (!loggingIn) deviceCode = null },
             title = { Text("GitHub verification code") },
             text = {
-                Text(
-                    "Enter this code on GitHub:\n\n${deviceCode!!.userCode}\n\nGitHub page: ${deviceCode!!.verificationUri}\n\nThe code expires after 15 minutes."
-                )
+                androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Enter this code on GitHub:")
+                    Text(deviceCode!!.userCode, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("GitHub page: ${deviceCode!!.verificationUri}")
+                    Text("The code expires after 15 minutes.")
+                    if (loggingIn) {
+                        Text("Waiting for GitHub to confirm the login…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (loginError.isNotBlank()) {
+                        Text("Login error: $loginError", color = MaterialTheme.colorScheme.error)
+                    }
+                }
             },
             confirmButton = {
                 Button(
                     enabled = !loggingIn,
                     onClick = {
                         val device = deviceCode ?: return@Button
-                        loggingIn = true
-                        logs.add(LogLine("Waiting for GitHub authorization…"))
+                        beginGitHubPolling(device)
                         GitHubOAuth(context).openVerificationPage(device.verificationUri)
-                        scope.launch {
-                            try {
-                                // Device Flow polling runs on IO. Keep the synchronous GitHub
-                                // /user request off Android's main thread as well.
-                                val token = GitHubOAuth(context).waitForToken(ghClientId, device)
-                                logs.add(LogLine("GitHub authorization received. Checking account…"))
-                                val login = withContext(Dispatchers.IO) {
-                                    GitHubApi(token).authenticatedLogin()
-                                }
-                                store.put("ghToken", token)
-                                store.put("owner", login)
-                                ghToken = token
-                                owner = login
-                                githubUser = login
-                                logs.add(LogLine("Signed in to GitHub as $login.", LogLine.Kind.SUCCESS))
-                                deviceCode = null
-                            } catch (e: Exception) {
-                                logs.add(LogLine(e.message ?: "GitHub login failed", LogLine.Kind.ERROR))
-                            } finally {
-                                loggingIn = false
-                            }
-                        }
                     }
                 ) { Text(if (loggingIn) "Waiting…" else "Open GitHub") }
             },
@@ -130,6 +154,7 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                         onClick = {
                             store.put("ghClientId", ghClientId)
                             loggingIn = true
+                            loginError = ""
                             logs.add(LogLine("Requesting GitHub verification code…"))
                             scope.launch {
                                 try {
@@ -138,7 +163,8 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                                     deviceCode = device
                                     loggingIn = false
                                 } catch (e: Exception) {
-                                    logs.add(LogLine(e.message ?: "GitHub login failed", LogLine.Kind.ERROR))
+                                    loginError = e.message ?: "GitHub login failed"
+                                    logs.add(LogLine(loginError, LogLine.Kind.ERROR))
                                     loggingIn = false
                                 }
                             }
