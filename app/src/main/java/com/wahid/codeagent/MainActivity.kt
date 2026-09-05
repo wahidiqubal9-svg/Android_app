@@ -10,11 +10,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -23,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
@@ -50,7 +53,51 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
     var running by remember { mutableStateOf(false) }
     var loggingIn by remember { mutableStateOf(false) }
     var githubUser by remember { mutableStateOf(if (ghToken.isNotBlank()) owner else "") }
+    var deviceCode by remember { mutableStateOf<GitHubOAuth.DeviceCode?>(null) }
     val logs = remember { mutableStateListOf<LogLine>() }
+
+    if (deviceCode != null) {
+        AlertDialog(
+            onDismissRequest = { if (!loggingIn) deviceCode = null },
+            title = { Text("GitHub verification code") },
+            text = {
+                Text(
+                    "Enter this code on GitHub:\n\n${deviceCode!!.userCode}\n\nGitHub page: ${deviceCode!!.verificationUri}\n\nThe code expires after 15 minutes."
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !loggingIn,
+                    onClick = {
+                        val device = deviceCode ?: return@Button
+                        loggingIn = true
+                        logs.add(LogLine("Waiting for GitHub authorization…"))
+                        GitHubOAuth(context).openVerificationPage(device.verificationUri)
+                        scope.launch {
+                            try {
+                                val token = GitHubOAuth(context).waitForToken(ghClientId, device)
+                                store.put("ghToken", token)
+                                ghToken = token
+                                val login = GitHubApi(token).authenticatedLogin()
+                                owner = login
+                                githubUser = login
+                                store.put("owner", login)
+                                logs.add(LogLine("Signed in to GitHub as $login.", LogLine.Kind.SUCCESS))
+                                deviceCode = null
+                            } catch (e: Exception) {
+                                logs.add(LogLine(e.message ?: "GitHub login failed", LogLine.Kind.ERROR))
+                            } finally {
+                                loggingIn = false
+                            }
+                        }
+                    }
+                ) { Text(if (loggingIn) "Waiting…" else "Open GitHub") }
+            },
+            dismissButton = {
+                TextButton(enabled = !loggingIn, onClick = { deviceCode = null }) { Text("Cancel") }
+            }
+        )
+    }
 
     MaterialTheme {
         Scaffold { paddingValues ->
@@ -76,28 +123,22 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                         onClick = {
                             store.put("ghClientId", ghClientId)
                             loggingIn = true
-                            logs.add(LogLine("Starting GitHub sign-in…"))
+                            logs.add(LogLine("Requesting GitHub verification code…"))
                             scope.launch {
                                 try {
                                     val oauth = GitHubOAuth(context)
-                                    val token = oauth.login(ghClientId)
-                                    store.put("ghToken", token)
-                                    ghToken = token
-                                    val login = GitHubApi(token).authenticatedLogin()
-                                    owner = login
-                                    githubUser = login
-                                    store.put("owner", login)
-                                    logs.add(LogLine("Signed in to GitHub as $login.", LogLine.Kind.SUCCESS))
+                                    val device = oauth.start(ghClientId)
+                                    deviceCode = device
+                                    loggingIn = false
                                 } catch (e: Exception) {
                                     logs.add(LogLine(e.message ?: "GitHub login failed", LogLine.Kind.ERROR))
-                                } finally {
                                     loggingIn = false
                                 }
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !loggingIn && ghClientId.isNotBlank()
-                    ) { Text(if (loggingIn) "Waiting for GitHub…" else "Sign in with GitHub") }
+                        enabled = !loggingIn && deviceCode == null && ghClientId.isNotBlank()
+                    ) { Text(if (loggingIn) "Requesting code…" else "Sign in with GitHub") }
 
                     if (githubUser.isNotBlank()) {
                         Text("✓ GitHub connected as $githubUser", style = MaterialTheme.typography.bodyMedium)
