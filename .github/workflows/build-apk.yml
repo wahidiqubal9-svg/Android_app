@@ -20,14 +20,14 @@ jobs:
           java-version: '21'
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-      - name: Install Android 37 platform
-        run: sdkmanager "platforms;android-37"
+      - name: Install Android 36 platform
+        run: sdkmanager "platforms;android-36"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.0'
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
