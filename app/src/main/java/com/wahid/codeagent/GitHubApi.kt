@@ -24,6 +24,7 @@ class GitHubApi(private val token: String) {
             return if (text.isBlank()) JsonNull else Json.parseToJsonElement(text)
         }
     }
+    fun authenticatedLogin(): String = call(req("https://api.github.com/user")).jsonObject["login"]!!.jsonPrimitive.content
     fun branchSha(owner: String, repo: String, branch: String): String = call(req("https://api.github.com/repos/$owner/$repo/git/ref/heads/${enc(branch)}")).jsonObject["object"]!!.jsonObject["sha"]!!.jsonPrimitive.content
     fun listFiles(owner: String, repo: String, branch: String): List<String> {
         val sha = branchSha(owner, repo, branch)
