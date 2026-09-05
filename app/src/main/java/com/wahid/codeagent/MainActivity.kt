@@ -1,10 +1,10 @@
 package com.wahid.codeagent
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -30,12 +30,12 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { CodeAgentApp(SecureStore(this)) }
+        setContent { CodeAgentApp(SecureStore(this), this) }
     }
 }
 
 @Composable
-fun CodeAgentApp(store: SecureStore) {
+fun CodeAgentApp(store: SecureStore, context: Context) {
     val scope = rememberCoroutineScope()
 
     var baseUrl by remember { mutableStateOf(store.get("baseUrl") ?: "https://api.deepseek.com/v1") }
@@ -79,7 +79,7 @@ fun CodeAgentApp(store: SecureStore) {
                             logs.add(LogLine("Starting GitHub sign-in…"))
                             scope.launch {
                                 try {
-                                    val oauth = GitHubOAuth((storeContext()) )
+                                    val oauth = GitHubOAuth(context)
                                     val token = oauth.login(ghClientId)
                                     store.put("ghToken", token)
                                     ghToken = token
@@ -168,11 +168,6 @@ fun CodeAgentApp(store: SecureStore) {
         }
     }
 }
-
-// The Compose function above needs the Activity context for the OAuth browser flow.
-// This small holder is set by the Activity before Compose is displayed.
-private lateinit var appContext: android.content.Context
-private fun storeContext(): android.content.Context = appContext
 
 @Composable
 private fun Field(value: String, label: String, minLines: Int = 1, onChange: (String) -> Unit) {
