@@ -28,270 +28,113 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        setContent {
-            CodeAgentApp(SecureStore(this))
-        }
+        setContent { CodeAgentApp(SecureStore(this)) }
     }
 }
 
 @Composable
 fun CodeAgentApp(store: SecureStore) {
-
     val scope = rememberCoroutineScope()
 
-    var baseUrl by remember {
-        mutableStateOf(
-            store.get("baseUrl")
-                ?: "https://api.deepseek.com/v1"
-        )
-    }
-
-    var model by remember {
-        mutableStateOf(
-            store.get("model")
-                ?: "deepseek-v4-flash"
-        )
-    }
-
-    var aiKey by remember {
-        mutableStateOf(
-            store.get("aiKey") ?: ""
-        )
-    }
-
-    var ghToken by remember {
-        mutableStateOf(
-            store.get("ghToken") ?: ""
-        )
-    }
-
-    var owner by remember {
-        mutableStateOf(
-            store.get("owner")
-                ?: "wahidiqubal9-svg"
-        )
-    }
-
-    var repo by remember {
-        mutableStateOf(
-            store.get("repo")
-                ?: "Medicalcoupons.in"
-        )
-    }
-
-    var branch by remember {
-        mutableStateOf(
-            store.get("branch")
-                ?: "main"
-        )
-    }
-
-    var task by remember {
-        mutableStateOf("")
-    }
-
-    var running by remember {
-        mutableStateOf(false)
-    }
-
-    val logs = remember {
-        mutableStateListOf<LogLine>()
-    }
+    var baseUrl by remember { mutableStateOf(store.get("baseUrl") ?: "https://api.deepseek.com/v1") }
+    var model by remember { mutableStateOf(store.get("model") ?: "deepseek-v4-flash") }
+    var aiKey by remember { mutableStateOf(store.get("aiKey") ?: "") }
+    var ghToken by remember { mutableStateOf(store.get("ghToken") ?: "") }
+    var ghClientId by remember { mutableStateOf(store.get("ghClientId") ?: "") }
+    var owner by remember { mutableStateOf(store.get("owner") ?: "") }
+    var repo by remember { mutableStateOf(store.get("repo") ?: "Medicalcoupons.in") }
+    var branch by remember { mutableStateOf(store.get("branch") ?: "main") }
+    var task by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(false) }
+    var loggingIn by remember { mutableStateOf(false) }
+    var githubUser by remember { mutableStateOf(if (ghToken.isNotBlank()) owner else "") }
+    val logs = remember { mutableStateListOf<LogLine>() }
 
     MaterialTheme {
-
         Scaffold { paddingValues ->
-
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
-                    .padding(16.dp),
+                modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-
-                // ---------------------------------------------------------
-                // AI SETTINGS
-                // ---------------------------------------------------------
-
                 item {
-
-                    Text(
-                        text = "AI",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-
-                    Field(
-                        value = baseUrl,
-                        label = "OpenAI-compatible base URL",
-                        onChange = {
-                            baseUrl = it
-                        }
-                    )
-
-                    Field(
-                        value = model,
-                        label = "Model",
-                        onChange = {
-                            model = it
-                        }
-                    )
-
-                    Secret(
-                        value = aiKey,
-                        label = "AI API key",
-                        onChange = {
-                            aiKey = it
-                        }
-                    )
+                    Text("AI", style = MaterialTheme.typography.titleMedium)
+                    Field(baseUrl, "OpenAI-compatible base URL") { baseUrl = it }
+                    Field(model, "Model") { model = it }
+                    Secret(aiKey, "AI API key") { aiKey = it }
                 }
 
-                // ---------------------------------------------------------
-                // GITHUB SETTINGS
-                // ---------------------------------------------------------
-
                 item {
-
+                    Text("GitHub", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = "GitHub",
-                        style = MaterialTheme.typography.titleMedium
+                        "Sign in with GitHub so you don't need to create or paste a personal access token.",
+                        style = MaterialTheme.typography.bodySmall
                     )
-
-                    Secret(
-                        value = ghToken,
-                        label = "GitHub fine-grained token",
-                        onChange = {
-                            ghToken = it
-                        }
-                    )
-
-                    Field(
-                        value = owner,
-                        label = "Owner",
-                        onChange = {
-                            owner = it
-                        }
-                    )
-
-                    Field(
-                        value = repo,
-                        label = "Repository",
-                        onChange = {
-                            repo = it
-                        }
-                    )
-
-                    Field(
-                        value = branch,
-                        label = "Base branch",
-                        onChange = {
-                            branch = it
-                        }
-                    )
-                }
-
-                // ---------------------------------------------------------
-                // SAVE SETTINGS
-                // ---------------------------------------------------------
-
-                item {
-
+                    Field(ghClientId, "GitHub OAuth Client ID") { ghClientId = it }
                     Button(
                         onClick = {
+                            store.put("ghClientId", ghClientId)
+                            loggingIn = true
+                            logs.add(LogLine("Starting GitHub sign-in…"))
+                            scope.launch {
+                                try {
+                                    val oauth = GitHubOAuth((storeContext()) )
+                                    val token = oauth.login(ghClientId)
+                                    store.put("ghToken", token)
+                                    ghToken = token
+                                    val login = GitHubApi(token).authenticatedLogin()
+                                    owner = login
+                                    githubUser = login
+                                    store.put("owner", login)
+                                    logs.add(LogLine("Signed in to GitHub as $login.", LogLine.Kind.SUCCESS))
+                                } catch (e: Exception) {
+                                    logs.add(LogLine(e.message ?: "GitHub login failed", LogLine.Kind.ERROR))
+                                } finally {
+                                    loggingIn = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !loggingIn && ghClientId.isNotBlank()
+                    ) { Text(if (loggingIn) "Waiting for GitHub…" else "Sign in with GitHub") }
 
-                            store.put(
-                                "baseUrl",
-                                baseUrl
-                            )
+                    if (githubUser.isNotBlank()) {
+                        Text("✓ GitHub connected as $githubUser", style = MaterialTheme.typography.bodyMedium)
+                    }
 
-                            store.put(
-                                "model",
-                                model
-                            )
+                    Field(repo, "Repository") { repo = it }
+                    Field(branch, "Base branch") { branch = it }
+                }
 
-                            store.put(
-                                "aiKey",
-                                aiKey
-                            )
-
-                            store.put(
-                                "ghToken",
-                                ghToken
-                            )
-
-                            store.put(
-                                "owner",
-                                owner
-                            )
-
-                            store.put(
-                                "repo",
-                                repo
-                            )
-
-                            store.put(
-                                "branch",
-                                branch
-                            )
-
-                            logs.add(
-                                LogLine(
-                                    "Settings saved securely.",
-                                    LogLine.Kind.SUCCESS
-                                )
-                            )
+                item {
+                    Button(
+                        onClick = {
+                            store.put("baseUrl", baseUrl)
+                            store.put("model", model)
+                            store.put("aiKey", aiKey)
+                            store.put("ghToken", ghToken)
+                            store.put("ghClientId", ghClientId)
+                            store.put("owner", owner)
+                            store.put("repo", repo)
+                            store.put("branch", branch)
+                            logs.add(LogLine("Settings saved securely.", LogLine.Kind.SUCCESS))
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) {
-
-                        Text("Save settings")
-                    }
+                    ) { Text("Save settings") }
                 }
 
-                // ---------------------------------------------------------
-                // TASK
-                // ---------------------------------------------------------
-
                 item {
-
-                    Text(
-                        text = "Task",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-
-                    Field(
-                        value = task,
-                        label = "Tell the agent what to change",
-                        minLines = 5,
-                        onChange = {
-                            task = it
-                        }
-                    )
-
+                    Text("Task", style = MaterialTheme.typography.titleMedium)
+                    Field(task, "Tell the agent what to change", minLines = 5) { task = it }
                     Button(
                         onClick = {
-
                             running = true
                             logs.clear()
-
                             scope.launch {
-
                                 try {
-
-                                    val githubApi = GitHubApi(
-                                        ghToken
-                                    )
-
-                                    val aiClient = AiClient(
-                                        baseUrl,
-                                        aiKey,
-                                        model
-                                    )
-
+                                    val githubApi = GitHubApi(ghToken)
+                                    val aiClient = AiClient(baseUrl, aiKey, model)
                                     val config = AgentConfig(
                                         baseUrl = baseUrl,
                                         model = model,
@@ -301,82 +144,23 @@ fun CodeAgentApp(store: SecureStore) {
                                         repo = repo,
                                         baseBranch = branch
                                     )
-
-                                    val agent = AgentEngine(
-                                        githubApi,
-                                        aiClient,
-                                        config
-                                    ) { logLine ->
-
-                                        logs.add(logLine)
-                                    }
-
+                                    val agent = AgentEngine(githubApi, aiClient, config) { logLine -> logs.add(logLine) }
                                     agent.run(task)
-
                                 } catch (e: Exception) {
-
-                                    logs.add(
-                                        LogLine(
-                                            e.message
-                                                ?: "Unknown error",
-                                            LogLine.Kind.ERROR
-                                        )
-                                    )
-
-                                } finally {
-
-                                    running = false
-                                }
+                                    logs.add(LogLine(e.message ?: "Unknown error", LogLine.Kind.ERROR))
+                                } finally { running = false }
                             }
-
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !running &&
-                                task.isNotBlank() &&
-                                aiKey.isNotBlank() &&
-                                ghToken.isNotBlank()
-                    ) {
-
-                        Text(
-                            if (running) {
-                                "Agent running…"
-                            } else {
-                                "Run agent"
-                            }
-                        )
-                    }
+                        enabled = !running && task.isNotBlank() && aiKey.isNotBlank() && ghToken.isNotBlank() && owner.isNotBlank()
+                    ) { Text(if (running) "Agent running…" else "Run agent") }
                 }
 
-                // ---------------------------------------------------------
-                // ACTIVITY LOG
-                // ---------------------------------------------------------
-
+                item { Text("Activity", style = MaterialTheme.typography.titleMedium) }
+                items(logs) { log -> Text("• ${log.text}", style = MaterialTheme.typography.bodySmall) }
                 item {
-
                     Text(
-                        text = "Activity",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-
-                items(logs) { log ->
-
-                    Text(
-                        text = "• ${log.text}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-
-                // ---------------------------------------------------------
-                // SAFETY INFORMATION
-                // ---------------------------------------------------------
-
-                item {
-
-                    Text(
-                        text = "Safety: changes are made on a new working " +
-                                "branch and the agent creates a draft PR. " +
-                                "The base branch is not written directly.",
+                        "Safety: changes are made on a new working branch and the agent creates a draft PR. The base branch is not written directly.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -385,47 +169,17 @@ fun CodeAgentApp(store: SecureStore) {
     }
 }
 
-// -------------------------------------------------------------------------
-// NORMAL TEXT FIELD
-// -------------------------------------------------------------------------
+// The Compose function above needs the Activity context for the OAuth browser flow.
+// This small holder is set by the Activity before Compose is displayed.
+private lateinit var appContext: android.content.Context
+private fun storeContext(): android.content.Context = appContext
 
 @Composable
-private fun Field(
-    value: String,
-    label: String,
-    minLines: Int = 1,
-    onChange: (String) -> Unit
-) {
-
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = {
-            Text(label)
-        },
-        minLines = minLines,
-        modifier = Modifier.fillMaxWidth()
-    )
+private fun Field(value: String, label: String, minLines: Int = 1, onChange: (String) -> Unit) {
+    OutlinedTextField(value, onValueChange = onChange, label = { Text(label) }, minLines = minLines, modifier = Modifier.fillMaxWidth())
 }
 
-// -------------------------------------------------------------------------
-// PASSWORD / SECRET FIELD
-// -------------------------------------------------------------------------
-
 @Composable
-private fun Secret(
-    value: String,
-    label: String,
-    onChange: (String) -> Unit
-) {
-
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = {
-            Text(label)
-        },
-        visualTransformation = PasswordVisualTransformation(),
-        modifier = Modifier.fillMaxWidth()
-    )
+private fun Secret(value: String, label: String, onChange: (String) -> Unit) {
+    OutlinedTextField(value, onValueChange = onChange, label = { Text(label) }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
 }
