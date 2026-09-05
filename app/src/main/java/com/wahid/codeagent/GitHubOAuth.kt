@@ -11,10 +11,13 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.IOException
 
 /** GitHub OAuth Device Flow. No personal access token is typed into the app. */
 class GitHubOAuth(private val context: Context) {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .retryOnConnectionFailure(true)
+        .build()
     private val deviceUrl = "https://github.com/login/device/code"
     private val tokenUrl = "https://github.com/login/oauth/access_token"
 
@@ -56,6 +59,7 @@ class GitHubOAuth(private val context: Context) {
 
     suspend fun waitForToken(clientId: String, device: DeviceCode): String = withContext(Dispatchers.IO) {
         var waitSeconds = device.intervalSeconds.coerceAtLeast(5L)
+        var networkRetrySeconds = 2L
         repeat(120) {
             delay(waitSeconds * 1000L)
             val body = FormBody.Builder()
@@ -68,18 +72,30 @@ class GitHubOAuth(private val context: Context) {
                 .post(body)
                 .header("Accept", "application/json")
                 .build()
-            client.newCall(request).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                val json = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject
-                val token = json["access_token"]?.jsonPrimitive?.content
-                if (!token.isNullOrBlank()) return@withContext token
-                when (json["error"]?.jsonPrimitive?.content) {
-                    "authorization_pending" -> Unit
-                    "slow_down" -> waitSeconds += 5L
-                    "expired_token" -> error("GitHub login expired. Please start again.")
-                    "access_denied" -> error("GitHub login was denied.")
-                    else -> if (json["error"] != null) error(json["error_description"]?.jsonPrimitive?.content ?: "GitHub login failed")
+
+            try {
+                client.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (text.isBlank()) {
+                        throw IOException("GitHub returned an empty response")
+                    }
+                    val json = kotlinx.serialization.json.Json.parseToJsonElement(text).jsonObject
+                    val token = json["access_token"]?.jsonPrimitive?.content
+                    if (!token.isNullOrBlank()) return@withContext token
+                    when (json["error"]?.jsonPrimitive?.content) {
+                        "authorization_pending" -> Unit
+                        "slow_down" -> waitSeconds += 5L
+                        "expired_token" -> error("GitHub login expired. Please start again.")
+                        "access_denied" -> error("GitHub login was denied.")
+                        else -> if (json["error"] != null) error(json["error_description"]?.jsonPrimitive?.content ?: "GitHub login failed")
+                    }
                 }
+                networkRetrySeconds = 2L
+            } catch (e: IOException) {
+                // A temporary Android DNS/network failure must not cancel an otherwise valid
+                // device authorization. Retry the next poll instead of ending the login flow.
+                delay(networkRetrySeconds * 1000L)
+                networkRetrySeconds = (networkRetrySeconds + 2L).coerceAtMost(10L)
             }
         }
         error("GitHub login timed out. Please try again.")
