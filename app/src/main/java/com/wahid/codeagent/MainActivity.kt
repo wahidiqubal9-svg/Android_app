@@ -28,7 +28,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,13 +77,18 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                         GitHubOAuth(context).openVerificationPage(device.verificationUri)
                         scope.launch {
                             try {
+                                // Device Flow polling runs on IO. Keep the synchronous GitHub
+                                // /user request off Android's main thread as well.
                                 val token = GitHubOAuth(context).waitForToken(ghClientId, device)
+                                logs.add(LogLine("GitHub authorization received. Checking account…"))
+                                val login = withContext(Dispatchers.IO) {
+                                    GitHubApi(token).authenticatedLogin()
+                                }
                                 store.put("ghToken", token)
+                                store.put("owner", login)
                                 ghToken = token
-                                val login = GitHubApi(token).authenticatedLogin()
                                 owner = login
                                 githubUser = login
-                                store.put("owner", login)
                                 logs.add(LogLine("Signed in to GitHub as $login.", LogLine.Kind.SUCCESS))
                                 deviceCode = null
                             } catch (e: Exception) {
@@ -141,7 +148,10 @@ fun CodeAgentApp(store: SecureStore, context: Context) {
                     ) { Text(if (loggingIn) "Requesting code…" else "Sign in with GitHub") }
 
                     if (githubUser.isNotBlank()) {
-                        Text("✓ GitHub connected as $githubUser", style = MaterialTheme.typography.bodyMedium)
+                        Text("✓ GitHub connected as $githubUser", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                    if (loggingIn && deviceCode != null) {
+                        Text("Waiting for GitHub authorization…", style = MaterialTheme.typography.bodySmall)
                     }
 
                     Field(repo, "Repository") { repo = it }
